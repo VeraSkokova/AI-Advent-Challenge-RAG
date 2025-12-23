@@ -20,6 +20,7 @@ class RagComparisonService(
         index: VectorIndex,
         topK: Int = 3
     ): RagAnswer {
+        println("\n🔍 Генерация ответа С RAG...")
         logger.info("Генерация ответа С RAG для вопроса: $question")
 
         // Получаем релевантные чанки
@@ -30,6 +31,12 @@ class RagComparisonService(
                 sourceFile = result.chunk.metadata.sourceFile,
                 score = result.similarity
             )
+        }
+
+        // Выводим найденные чанки в консоль
+        println("📚 Найденные чанки:")
+        chunks.forEachIndexed { i, chunk ->
+            println("  ${i + 1}. [${chunk.sourceFile}] (Score: %.4f)".format(chunk.score))
         }
 
         // Формируем контекст из чанков
@@ -58,6 +65,11 @@ $context
             maxTokens = 2000
         )
 
+        // Выводим ответ с RAG
+        println("\n✅ Ответ С RAG:")
+        println(answer)
+        println("\n" + "=".repeat(80))
+
         return RagAnswer(answer = answer, chunks = chunks)
     }
 
@@ -65,6 +77,7 @@ $context
      * Генерирует ответ БЕЗ RAG
      */
     suspend fun answerWithoutRag(question: String): String {
+        println("\n🤔 Генерация ответа БЕЗ RAG...")
         logger.info("Генерация ответа БЕЗ RAG для вопроса: $question")
 
         val systemPrompt = """
@@ -72,12 +85,19 @@ $context
 Ответь на вопрос пользователя на основе своих знаний.
         """.trimIndent()
 
-        return yandexGptClient.generateText(
+        val answer = yandexGptClient.generateText(
             systemPrompt = systemPrompt,
             userPrompt = question,
             temperature = 0.3,
             maxTokens = 2000
         )
+
+        // Выводим ответ без RAG
+        println("\n❌ Ответ БЕЗ RAG:")
+        println(answer)
+        println("\n" + "=".repeat(80))
+
+        return answer
     }
 
     /**
@@ -89,8 +109,10 @@ $context
     ): ComparisonReport {
         logger.info("Начинаю сравнение RAG vs БЕЗ-RAG для ${questions.size} вопросов")
 
-        val comparisons = questions.map { question ->
-            logger.info("Обработка вопроса: $question")
+        val comparisons = questions.mapIndexed { idx, question ->
+            println("\n" + "=".repeat(80))
+            println("📝 Вопрос ${idx + 1}/${questions.size}: \"$question\"")
+            println("=".repeat(80))
             
             val ragAnswer = answerWithRag(question, index)
             val noRagAnswer = answerWithoutRag(question)
@@ -105,7 +127,7 @@ $context
             )
         }
 
-        val summary = generateSummary(comparisons)
+        val summary = generateSummary(comparisons, index)
         val timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
 
         return ComparisonReport(
@@ -127,13 +149,26 @@ $context
         }
     }
 
-    private fun generateSummary(comparisons: List<QuestionComparison>): String {
+    private fun generateSummary(comparisons: List<QuestionComparison>, index: VectorIndex): String {
         val ragHelpedCount = comparisons.count { 
             it.analysis.contains("RAG помог") 
         }
         
+        // Подсчёт уникальных документов
+        val uniqueDocuments = index.chunks
+            .map { it.metadata.sourceFile }
+            .distinct()
+            .sorted()
+        
         return buildString {
             appendLine("## 📈 Общие выводы")
+            appendLine()
+            appendLine("### Использованный индекс:")
+            appendLine("- **Документов:** ${uniqueDocuments.size}")
+            uniqueDocuments.forEach { doc ->
+                appendLine("  - $doc")
+            }
+            appendLine("- **Чанков:** ${index.chunks.size}")
             appendLine()
             appendLine("### Статистика:")
             appendLine("- Всего вопросов: ${comparisons.size}")
