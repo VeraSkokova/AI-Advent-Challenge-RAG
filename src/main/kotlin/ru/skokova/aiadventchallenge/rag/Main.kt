@@ -120,10 +120,6 @@ fun saveComparisonReport(report: ComparisonReport) {
         appendLine("## 📅 Дата тестирования")
         appendLine(report.createdAt)
         appendLine()
-        appendLine("## 📚 Использованный индекс")
-        appendLine("- **Документов:** 1 (transcription_rag_lecture.md)")
-        appendLine("- **Чанков:** [см. stats]")
-        appendLine()
         appendLine("---")
         appendLine()
         
