@@ -141,7 +141,7 @@ fun saveComparisonReport(report: ComparisonReport) {
         appendLine()
         
         report.questions.forEachIndexed { index, comparison ->
-            appendLine("## Vопрос ${index + 1}: \"${comparison.question}\"")
+            appendLine("## Вопрос ${index + 1}: \"${comparison.question}\"")
             appendLine()
             
             // Ответ С RAG
