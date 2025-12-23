@@ -141,11 +141,36 @@ $context
         val hasSourceReferences = ragAnswer.answer.contains("[источник:")
         val avgScore = ragAnswer.chunks.map { it.score }.average()
         
+        // Проверяем, есть ли в ответе без RAG признаки отсутствия знаний
+        val noRagLacksKnowledge = noRagAnswer.contains("нет информации", ignoreCase = true) ||
+                                  noRagAnswer.contains("не знаю", ignoreCase = true) ||
+                                  noRagAnswer.contains("к сожалению", ignoreCase = true) ||
+                                  noRagAnswer.contains("обратитесь к документации", ignoreCase = true) ||
+                                  noRagAnswer.contains("уточните", ignoreCase = true)
+        
+        // Проверяем, дал RAG конкретный ответ с источниками
+        val ragProvidesSpecificAnswer = hasSourceReferences && 
+                                         ragAnswer.answer.length > 50 &&
+                                         !ragAnswer.answer.contains("нет информации", ignoreCase = true)
+        
+        // RAG помог, если:
+        // 1. Модель без RAG не знает ответа (говорит "нет информации")
+        // 2. RAG даёт конкретный ответ с источниками
+        // 3. Score чанков не слишком низкий (>0.35)
+        val ragHelped = noRagLacksKnowledge && ragProvidesSpecificAnswer && avgScore > 0.35
+        
         return buildString {
-            appendLine("**Точность фактов:** ${if (avgScore > 0.7) "высокая" else if (avgScore > 0.5) "средняя" else "низкая"}")
+            appendLine("**Точность фактов:** ${if (avgScore > 0.6) "высокая" else if (avgScore > 0.4) "средняя" else "низкая"}")
             appendLine("**Конкретика:** ${if (hasSourceReferences) "есть ссылки на источники" else "общие фразы"}")
             appendLine("**Средний score чанков:** %.4f".format(avgScore))
-            appendLine("**Вывод:** ${if (avgScore > 0.6) "RAG помог предоставить точную информацию из документов" else "RAG не дал существенного преимущества"}")
+            
+            if (ragHelped) {
+                appendLine("**Вывод:** ✅ RAG помог! Модель без RAG не знала ответа, а с RAG предоставила точную информацию из документов")
+            } else if (avgScore > 0.6) {
+                appendLine("**Вывод:** RAG предоставил точную информацию из документов (высокий score)")
+            } else {
+                appendLine("**Вывод:** RAG не дал существенного преимущества")
+            }
         }
     }
 
@@ -172,18 +197,27 @@ $context
             appendLine()
             appendLine("### Статистика:")
             appendLine("- Всего вопросов: ${comparisons.size}")
-            appendLine("- RAG помог: $ragHelpedCount/${comparisons.size}")
-            appendLine("- RAG не помог: ${comparisons.size - ragHelpedCount}/${comparisons.size}")
+            appendLine("- ✅ RAG помог: $ragHelpedCount/${comparisons.size}")
+            appendLine("- ❌ RAG не помог: ${comparisons.size - ragHelpedCount}/${comparisons.size}")
             appendLine()
-            appendLine("### Где RAG помог:")
-            appendLine("- В вопросах, требующих точных фактов из документации")
-            appendLine("- При необходимости ссылок на источники")
-            appendLine("- Для специфичных технических деталей")
+            
+            if (ragHelpedCount > 0) {
+                appendLine("### ✅ Где RAG помог:")
+                appendLine("- Модель без RAG не знала ответа (\"нет информации\")")
+                appendLine("- RAG предоставил точные факты с ссылками на источники")
+                appendLine("- Вопросы про специфичные детали проектов")
+            } else {
+                appendLine("### ⚠️ Почему RAG не помог:")
+                appendLine("- Модель уже знала ответы на вопросы")
+                appendLine("- Низкое косинусное сходство чанков")
+                appendLine("- Вопросы слишком общие или не по теме документов")
+            }
+            
             appendLine()
-            appendLine("### Рекомендации:")
-            appendLine("- Использовать RAG для фактологических вопросов")
-            appendLine("- Увеличить порог косинусного сходства для более точных результатов")
-            appendLine("- Настроить размер чанков под специфику документов")
+            appendLine("### 💡 Рекомендации:")
+            appendLine("- Использовать RAG для специфичных вопросов про ваши проекты")
+            appendLine("- Добавлять документы с уникальной информацией")
+            appendLine("- Экспериментировать с размером чанков и overlap")
         }
     }
 }
