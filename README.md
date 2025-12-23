@@ -214,4 +214,4 @@ Overlap (перекрытие) 100 символов необходим для с
 **Vera Skokova** ([@VeraSkokova](https://github.com/VeraSkokova))  
 **Дата:** 24.12.2025  
 
-*Разработано в рамках [AI Advent Challenge 2024](https://github.com/VeraSkokova)* 🎄
+*Разработано в рамках AI Advent Challenge* 🎄
