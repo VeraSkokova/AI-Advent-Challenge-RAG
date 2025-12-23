@@ -141,28 +141,53 @@ fun saveComparisonReport(report: ComparisonReport) {
         appendLine()
         
         report.questions.forEachIndexed { index, comparison ->
-            appendLine("## Вопрос ${index + 1}: \"${comparison.question}\"")
+            appendLine("## Vопрос ${index + 1}: \"${comparison.question}\"")
             appendLine()
+            
+            // Ответ С RAG
             appendLine("### ✅ Ответ С RAG")
+            appendLine()
             appendLine("**Использованные чанки:**")
+            appendLine()
             comparison.answerWithRag.chunks.forEachIndexed { i, chunk ->
                 appendLine("${i + 1}. **[${chunk.sourceFile}]** (Score: %.4f)".format(chunk.score))
-                appendLine("   > \"${chunk.text.take(150)}...\"")
+                // Умное обрезание: до 100 символов, но по границе слова
+                val preview = chunk.text
+                    .take(100)
+                    .let { truncated ->
+                        if (chunk.text.length > 100) {
+                            // Находим последний пробел, чтобы не обрезать слово посередине
+                            val lastSpace = truncated.lastIndexOf(' ')
+                            if (lastSpace > 50) truncated.substring(0, lastSpace) else truncated
+                        } else truncated
+                    }
+                    .replace("\n", " ")  // Убираем переносы строк
+                    .replace("\r", "")
+                appendLine("   > “$preview...”")
                 appendLine()
             }
+            
             appendLine("**Ответ модели:**")
+            appendLine()
             appendLine(comparison.answerWithRag.answer)
             appendLine()
+            
+            // Ответ БЕЗ RAG
             appendLine("### ❌ Ответ БЕЗ RAG")
+            appendLine()
             appendLine(comparison.answerWithoutRag)
             appendLine()
+            
+            // Анализ
             appendLine("### 🔍 Анализ различий")
+            appendLine()
             appendLine(comparison.analysis)
             appendLine()
             appendLine("---")
             appendLine()
         }
         
+        // Summary
         appendLine(report.summary)
     }
     
