@@ -7,6 +7,8 @@ import ru.skokova.aiadventchallenge.rag.config.Config
 import ru.skokova.aiadventchallenge.rag.models.ComparisonReport
 import ru.skokova.aiadventchallenge.rag.services.IndexService
 import ru.skokova.aiadventchallenge.rag.services.RagComparisonService
+import ru.skokova.aiadventchallenge.rag.services.RerankingComparisonService
+import ru.skokova.aiadventchallenge.rag.services.RerankingService
 import ru.skokova.aiadventchallenge.rag.services.SearchService
 import ru.skokova.aiadventchallenge.rag.services.TextChunker
 import java.io.File
@@ -22,6 +24,9 @@ fun main() = runBlocking {
     val indexService = IndexService(embeddingClient, chunker)
     val searchService = SearchService(embeddingClient)
     val ragComparisonService = RagComparisonService(searchService, gptClient)
+    // Инициализация сервисов реранкинга
+    val rerankingService = RerankingService(gptClient)
+    val comparisonService = RerankingComparisonService(searchService, rerankingService, gptClient)
 
     // Загрузка существующего индекса в память при старте
     var currentIndex = indexService.loadIndex()
@@ -115,6 +120,108 @@ fun main() = runBlocking {
                         e.printStackTrace()
                     }
                 }
+            }
+            "rerank" -> {
+                if (currentIndex == null) {
+                    println("❌ Индекс не загружен. Выполните 'index <путь>' или 'load'")
+                    continue
+                }
+
+                print("🔍 Введите запрос: ")
+                val query = readln()
+
+                print("🎚️ Введите порог (по умолчанию 0.35): ")
+                val thresholdInput = readln()
+                val threshold = thresholdInput.toDoubleOrNull() ?: 0.35
+
+                println("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+                println("🔍 Поиск с реранкингом (threshold: $threshold)...")
+
+                // 1. Базовый поиск
+                val searchResults = searchService.search(query, currentIndex, topK = 5)
+
+                // 2. Threshold фильтрация
+                val thresholdResults = rerankingService.filterByThreshold(searchResults, threshold)
+
+                println("\n--- Результаты threshold фильтрации ---")
+                if (thresholdResults.none { it.isRelevant }) {
+                    println("⚠️ Нет результатов выше порога $threshold")
+                } else {
+                    thresholdResults.filter { it.isRelevant }.forEachIndexed { idx, result ->
+                        println("${idx + 1}. [${result.chunk.metadata.sourceFile}] Score: %.4f".format(result.originalSimilarity))
+                    }
+                }
+                println("Отфильтровано: ${thresholdResults.count { !it.isRelevant }} чанков")
+
+                // 3. LLM реранкинг
+                println("\n--- LLM реранкинг (может занять время) ---")
+                val llmResults = rerankingService.rerankWithLLM(query, searchResults, threshold)
+
+                if (llmResults.none { it.isRelevant }) {
+                    println("⚠️ Нет результатов выше порога $threshold после LLM оценки")
+                } else {
+                    llmResults.filter { it.isRelevant }.forEachIndexed { idx, result ->
+                        println("${idx + 1}. [${result.chunk.metadata.sourceFile}] " +
+                                "Combined Score: %.4f (orig: %.4f)".format(result.rerankScore, result.originalSimilarity))
+                    }
+                }
+            }
+
+            "compare-rerank" -> {
+                if (currentIndex == null) {
+                    println("❌ Индекс не загружен")
+                    continue
+                }
+
+                print("🎚️ Введите порог (по умолчанию 0.35): ")
+                val thresholdInput = readln()
+                val threshold = thresholdInput.toDoubleOrNull() ?: 0.35
+
+                println("\n🔬 Запускаю сравнение методов реранкинга...")
+                println("⏱️ Это займёт несколько минут (10 вопросов × 3 метода)...")
+
+                val testQuestions = listOf(
+                    // 1. Проверка дистрактора (chunking): Векторный поиск может найти кулинарию, LLM должна отфильтровать
+                    "Что такое chunking и как он помогает в RAG?",
+
+                    // 2. Специфический факт: Требует точного совпадения параметров, LLM должна поднять документацию выше
+                    "Какие параметры modelUri и temperature используются по умолчанию в YandexGPT?",
+
+                    // 3. Сравнение (Reasoning): Ответ собирается из нескольких кусков, LLM должна оставить оба
+                    "Чем отличается RAG от Fine-tuning и когда что использовать?",
+
+                    // 4. Ловушка "Векторы": Векторный поиск любит слово "вектор", но вопрос про физический смысл
+                    "Объясни геометрический смысл косинусного сходства векторов",
+
+                    // 5. Технический вопрос: Проверка понимания архитектуры
+                    "Зачем нужен overlap между чанками и какой размер рекомендуются?",
+
+                    // 6. Вопрос с подвохом (Self-attention): Если этого нет в базе, LLM должна честно дать 0.0
+                    "Как работает механизм self-attention в трансформерах?",
+
+                    // 7. Практический вопрос: Векторный поиск может найти теорию, LLM должна найти практику
+                    "Какие конкретно модели эмбеддингов лучше брать для русского языка локально?",
+
+                    // 8. Вопрос про деньги/лимиты (если есть в доке): Важно для точного поиска
+                    "Какие ограничения на количество токенов есть в YandexGPT API?",
+
+                    // 9. Обобщение: Требует понимания всего пайплайна
+                    "Опиши полный алгоритм работы RAG системы по шагам",
+
+                    // 10. Абстрактный вопрос: Проверка на "галлюцинации" реранкера
+                    "Почему векторные базы данных называют семантическим поиском?"
+                )
+
+                val comparisons = comparisonService.runComparison(
+                    testQuestions,
+                    currentIndex,
+                    threshold
+                )
+
+                comparisonService.saveReport(comparisons)
+
+                println("\n✅ Сравнение завершено!")
+                println("📄 Отчёт сохранён в RERANKING_REPORT.md")
             }
             "stats" -> {
                 if (currentIndex == null) println("Индекс пуст")

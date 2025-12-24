@@ -1,11 +1,13 @@
 package ru.skokova.aiadventchallenge.rag.services
 
+import kotlinx.serialization.Serializable
 import org.slf4j.LoggerFactory
 import ru.skokova.aiadventchallenge.rag.client.YandexEmbeddingClient
 import ru.skokova.aiadventchallenge.rag.models.DocumentChunk
 import ru.skokova.aiadventchallenge.rag.models.VectorIndex
 import kotlin.math.sqrt
 
+@Serializable
 data class SearchResult(
     val chunk: DocumentChunk,
     val similarity: Double
