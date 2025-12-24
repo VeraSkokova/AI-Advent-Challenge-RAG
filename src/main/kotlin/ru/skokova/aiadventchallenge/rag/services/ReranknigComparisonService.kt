@@ -122,29 +122,32 @@ class RerankingComparisonService(
         sb.appendLine("# 🔬 Отчёт: Сравнение методов реранкинга (Day 18)")
         sb.appendLine()
         sb.appendLine("**Дата:** ${LocalDateTime.now()}")
-        sb.appendLine("**Порог:** ${comparisons.firstOrNull()?.thresholdUsed ?: 0.35}")
-        sb.appendLine("**Вопросов:** ${comparisons.size}")
+        sb.appendLine("**Порог (Threshold):** ${comparisons.firstOrNull()?.thresholdUsed ?: 0.35}")
+        sb.appendLine("**Всего вопросов:** ${comparisons.size}")
         sb.appendLine()
 
         // Статистика
         sb.appendLine("## 📊 Общая статистика")
+        sb.appendLine("*Показывает, как жестко разные методы фильтруют результаты поиска*")
         sb.appendLine()
-        sb.appendLine("| Метод | Avg Relevant % | Avg Score | Avg Filtered |")
-        sb.appendLine("|-------|----------------|-----------|--------------|")
+        // Переименовали колонки для ясности
+        sb.appendLine("| Метод | Pass Rate % (Прошло) | Mean Relevance Score | Dropped Chunks (Avg) |")
+        sb.appendLine("|-------|----------------------|----------------------|----------------------|")
 
         val avgNoFilter = comparisons.map { it.metricsNoFilter }.average()
         val avgThreshold = comparisons.map { it.metricsThreshold }.average()
         val avgLlm = comparisons.map { it.metricsLlmRerank }.average()
 
-        sb.appendLine(String.format("| Без фильтра | 100%% | %.3f | 0 |", avgNoFilter.averageSimilarity))
+        // Для "Без фильтра" Pass Rate всегда 100%, так как фильтра нет
+        sb.appendLine(String.format("| Baseline (Без фильтра) | 100%% | %.3f | 0.0 |", avgNoFilter.averageSimilarity))
 
-        sb.appendLine(String.format("| Threshold | %.1f%% | %.3f | %.1f |",
+        sb.appendLine(String.format("| Threshold Filter | %.1f%% | %.3f | %.1f |",
             if (avgThreshold.totalChunks > 0) avgThreshold.relevantChunks.toDouble() / avgThreshold.totalChunks * 100 else 0.0,
             avgThreshold.averageSimilarity,
             avgThreshold.filteredOutCount.toDouble()
         ))
 
-        sb.appendLine(String.format("| LLM Rerank | %.1f%% | %.3f | %.1f |",
+        sb.appendLine(String.format("| LLM Reranking | %.1f%% | %.3f | %.1f |",
             if (avgLlm.totalChunks > 0) avgLlm.relevantChunks.toDouble() / avgLlm.totalChunks * 100 else 0.0,
             avgLlm.averageSimilarity,
             avgLlm.filteredOutCount.toDouble()
@@ -158,43 +161,41 @@ class RerankingComparisonService(
             sb.appendLine()
 
             // Таблица топ-5 чанков с Дельтой
-            sb.appendLine("### 🧠 Анализ реранкинга (Top-5)")
-            sb.appendLine("| Rank | Файл | Orig Score | LLM Score | Delta | Статус |")
-            sb.appendLine("|------|------|------------|-----------|-------|--------|")
+            sb.appendLine("### 🧠 Детализация оценки (Top-5)")
+            // Новые названия колонок: Vector Score и Hybrid Score
+            sb.appendLine("| Rank | Файл | Vector Score | Hybrid Score | Delta | Статус |")
+            sb.appendLine("|------|------|--------------|--------------|-------|--------|")
 
-            // Берем результаты LLM реранкинга (включая нерелевантные, чтобы видеть, что отсеялось)
             comparison.resultsLlmRerank.take(5).forEachIndexed { rank, res ->
-                val llmScore = res.rerankScore ?: res.originalSimilarity
-                val delta = llmScore - res.originalSimilarity
+                val hybridScore = res.rerankScore ?: res.originalSimilarity
+                val delta = hybridScore - res.originalSimilarity
 
                 // Визуальные маркеры
                 val statusIcon = when {
-                    !res.isRelevant -> "❌ (Filtered)"
+                    !res.isRelevant -> "❌ (Dropped)"
                     delta > 0.1 -> "🚀 (Boosted)"
                     delta < -0.1 -> "📉 (Demoted)"
-                    else -> "➖ (Same)"
+                    else -> "➖"
                 }
 
-                val fileName = res.chunk.metadata.sourceFile.take(20) // Обрезаем длинные имена
+                val fileName = res.chunk.metadata.sourceFile.take(20)
 
                 sb.appendLine(String.format("| %d | %s | %.3f | **%.3f** | %+.3f | %s |",
-                    rank + 1, fileName, res.originalSimilarity, llmScore, delta, statusIcon))
+                    rank + 1, fileName, res.originalSimilarity, hybridScore, delta, statusIcon))
             }
             sb.appendLine()
 
             // Ответы
-            sb.appendLine("### 🤖 Сравнение ответов")
+            sb.appendLine("### 🤖 Сравнение качества ответов")
 
-            // Ответ Threshold (как представителя "глупого" фильтра)
-            sb.appendLine("**Threshold Filter:**")
+            sb.appendLine("**Threshold Filter (Базовый):**")
             sb.appendLine(codeBlockFence)
             sb.appendLine(comparison.answerWithThreshold.replace(codeBlockFence, "'''").take(300).replace("\n", " "))
             if (comparison.answerWithThreshold.length > 300) sb.append("...")
             sb.appendLine()
             sb.appendLine(codeBlockFence)
 
-            // Ответ LLM Rerank (наш чемпион)
-            sb.appendLine("**LLM Rerank:**")
+            sb.appendLine("**LLM Rerank (С реранкингом):**")
             sb.appendLine(codeBlockFence)
             sb.appendLine(comparison.answerWithLlmRerank.replace(codeBlockFence, "'''").take(300).replace("\n", " "))
             if (comparison.answerWithLlmRerank.length > 300) sb.append("...")
