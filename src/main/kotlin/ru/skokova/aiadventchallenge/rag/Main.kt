@@ -3,8 +3,10 @@ package ru.skokova.aiadventchallenge.rag
 import kotlinx.coroutines.runBlocking
 import ru.skokova.aiadventchallenge.rag.client.YandexEmbeddingClient
 import ru.skokova.aiadventchallenge.rag.client.YandexGptClient
-import ru.skokova.aiadventchallenge.rag.config.Config
 import ru.skokova.aiadventchallenge.rag.models.ComparisonReport
+import ru.skokova.aiadventchallenge.rag.models.VectorIndex
+import ru.skokova.aiadventchallenge.rag.repository.HistoryRepository
+import ru.skokova.aiadventchallenge.rag.services.ChatService
 import ru.skokova.aiadventchallenge.rag.services.IndexService
 import ru.skokova.aiadventchallenge.rag.services.RagComparisonService
 import ru.skokova.aiadventchallenge.rag.services.RerankingComparisonService
@@ -27,6 +29,9 @@ fun main() = runBlocking {
     // Инициализация сервисов реранкинга
     val rerankingService = RerankingService(gptClient)
     val comparisonService = RerankingComparisonService(searchService, rerankingService, gptClient)
+
+    val historyRepository = HistoryRepository("chat_history.json")
+    val chatService = ChatService(searchService, gptClient, historyRepository)
 
     // Загрузка существующего индекса в память при старте
     var currentIndex = indexService.loadIndex()
@@ -54,7 +59,7 @@ fun main() = runBlocking {
                     println("🚀 Начинаю индексацию папки: $args")
                     try {
                         currentIndex = indexService.createIndex(args)
-                        indexService.saveIndex(currentIndex!!)
+                        indexService.saveIndex(currentIndex)
                         println("✅ Индексация завершена успешно!")
                     } catch (e: Exception) {
                         println("❌ Ошибка индексации: ${e.message}")
@@ -68,7 +73,7 @@ fun main() = runBlocking {
                     println("❌ Введите поисковый запрос. Пример: search что такое RAG")
                 } else {
                     println("🔍 Ищу: \"$args\"...")
-                    val results = searchService.search(args, currentIndex!!)
+                    val results = searchService.search(args, currentIndex)
 
                     if (results.isEmpty()) {
                         println("Ничего не найдено 😔")
@@ -112,7 +117,7 @@ fun main() = runBlocking {
                     )
                     
                     try {
-                        val report = ragComparisonService.compareApproaches(questions, currentIndex!!)
+                        val report = ragComparisonService.compareApproaches(questions, currentIndex)
                         saveComparisonReport(report)
                         println("✅ Результаты сохранены в COMPARISON_REPORT.md")
                     } catch (e: Exception) {
@@ -225,13 +230,20 @@ fun main() = runBlocking {
             }
             "stats" -> {
                 if (currentIndex == null) println("Индекс пуст")
-                else println("📊 В индексе ${currentIndex!!.chunks.size} чанков. Создан: ${currentIndex!!.createdAt}")
+                else println("📊 В индексе ${currentIndex!!.chunks.size} чанков. Создан: ${currentIndex.createdAt}")
             }
             "exit" -> {
                 println("До свидания! 👋")
                 isRunning = false
             }
             "help" -> printHelp()
+            "chat" -> { // <--- НОВАЯ КОМАНДА
+                if (currentIndex == null) {
+                    println("⚠️ Сначала создайте индекс командой 'index <путь>'")
+                } else {
+                    runChatMode(chatService, currentIndex, scanner)
+                }
+            }
             else -> println("Неизвестная команда. Введите 'help'")
         }
     }
@@ -318,4 +330,87 @@ fun printHelp() {
         • stats          - Показать статистику индекса
         • exit           - Выход
     """.trimIndent())
+}
+
+// --- ANSI цвета для консоли ---
+object Ansi {
+    const val RESET = "\u001B[0m"
+    const val BOLD = "\u001B[1m"
+    const val GREEN = "\u001B[32m"
+    const val CYAN = "\u001B[36m"
+    const val YELLOW = "\u001B[33m"
+    const val WHITE = "\u001B[37m"
+    const val GREY = "\u001B[90m"
+}
+
+suspend fun runChatMode(
+    chatService: ChatService,
+    index: VectorIndex,
+    scanner: Scanner
+) {
+    // Очистка экрана (ANSI escape code)
+    print("\u001b[H\u001b[2J")
+
+    println("${Ansi.BOLD}${Ansi.CYAN}╔══════════════════════════════════════════════════════════════╗")
+    println("║         🤖 KOTLIN RAG CHAT :: DAY 19 CHALLENGE               ║")
+    println("╚══════════════════════════════════════════════════════════════╝${Ansi.RESET}")
+    println("${Ansi.GREY}Команды: /clear - забыть контекст, /exit - выход${Ansi.RESET}")
+
+    // --- Логика отображения истории ---
+    val historySize = chatService.getHistorySize()
+    if (historySize > 0) {
+        println("\n${Ansi.YELLOW}📜 Восстановлена история диалога: $historySize сообщений.${Ansi.RESET}")
+        // Можно показать последнее сообщение для контекста
+        // val lastMsg = chatService.getLastUserMessage()
+        // if (lastMsg != null) println("${Ansi.GREY}Последний запрос: \"$lastMsg\"${Ansi.RESET}")
+    } else {
+        println("\n${Ansi.GREY}📜 История пуста. Начинаем с чистого листа.${Ansi.RESET}")
+    }
+    // ----------------------------------
+
+    while (true) {
+        print("\n${Ansi.BOLD}${Ansi.GREEN}User 👤 > ${Ansi.RESET}")
+        val input = scanner.nextLine().trim()
+
+        if (input.isEmpty()) continue
+        if (input.equals("/exit", ignoreCase = true)) break
+        if (input.equals("/clear", ignoreCase = true)) {
+            chatService.clearHistory()
+            println("${Ansi.YELLOW}⚡ Память диалога очищена.${Ansi.RESET}")
+            continue
+        }
+
+        try {
+            print("${Ansi.CYAN}Bot 🤖 > ${Ansi.GREY}Думаю...${Ansi.RESET}")
+
+            val response = chatService.processQuery(input, index)
+
+            // Стираем "Думаю..." и пишем ответ
+            print("\r${Ansi.BOLD}${Ansi.CYAN}Bot 🤖 > ${Ansi.RESET}")
+            println(response.answer)
+
+            println()
+            if (response.sources.isNotEmpty()) {
+                println("${Ansi.GREY}┌── ${Ansi.YELLOW}📚 Источники контекста${Ansi.GREY} ───────────────────────────────────┐${Ansi.RESET}")
+
+                response.sources.forEachIndexed { idx, source ->
+                    // Выбираем цвет в зависимости от релевантности
+                    val relevanceColor = if (source.relevance > 0.6) Ansi.GREEN else Ansi.YELLOW
+                    // Правильное форматирование числа
+                    val scoreStr = String.format("%.2f", source.relevance)
+
+                    println("${Ansi.GREY}│${Ansi.RESET} ${idx + 1}. ${Ansi.BOLD}${source.fileName}${Ansi.RESET} ($relevanceColor$scoreStr${Ansi.RESET})")
+                    println("${Ansi.GREY}│${Ansi.RESET}    ${Ansi.GREY}\"${source.snippet.trim()}...\"${Ansi.RESET}")
+                }
+                println("${Ansi.GREY}└─────────────────────────────────────────────────────────────┘${Ansi.RESET}")
+            } else {
+                println("${Ansi.GREY}   (Ответ сгенерирован на основе общих знаний модели)${Ansi.RESET}")
+            }
+            println("${Ansi.GREY}─".repeat(60) + Ansi.RESET)
+
+        } catch (e: Exception) {
+            println("\n${Ansi.BOLD}${Ansi.YELLOW}❌ Ошибка:${Ansi.RESET} ${e.message}")
+            e.printStackTrace() // Полезно для отладки
+        }
+    }
 }
