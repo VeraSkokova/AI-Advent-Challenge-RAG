@@ -25,17 +25,15 @@ class ChatService(
     private var chatHistory: ChatHistory = historyRepository.load()
 
     private val similarityThreshold = 0.35
-    private val maxHistoryMessages = 10
+    private val maxHistoryMessages = 6 // Держим только 6 последних сообщений (3 пары), остальное в саммари
     private val topK = 3
 
     suspend fun processQuery(query: String, index: VectorIndex): ChatResponse {
-        logger.info("Обработка запроса: $query")
-
         // 1. Поиск релевантных документов (Retrieval)
         val searchResults = searchService.search(query, index, topK)
         val relevantChunks = searchResults.filter { it.similarity >= similarityThreshold }
 
-        // 2. Формирование источников для вывода
+        // 2. Формирование источников
         val sources = relevantChunks.map { result ->
             SourceInfo(
                 fileName = result.chunk.metadata.sourceFile,
@@ -44,7 +42,7 @@ class ChatService(
             )
         }
 
-        // 3. Формирование контекста из документов
+        // 3. Контекст из документов
         val contextText = if (relevantChunks.isNotEmpty()) {
             relevantChunks.joinToString("\n\n") { result ->
                 "[Источник: ${result.chunk.metadata.sourceFile}]\n${result.chunk.text}"
@@ -53,29 +51,25 @@ class ChatService(
             ""
         }
 
-        // 4. Управление размером истории (сжатие при необходимости)
+        // 4. Сжатие истории, если нужно
         manageHistorySize()
 
-        // 5. Формирование системного промпта с контекстом и историей
+        // 5. Генерация ответа
         val systemPrompt = buildSystemPrompt(contextText, relevantChunks.isNotEmpty())
+        val userPrompt = buildUserPromptWithHistory(query)
 
-        // 6. Формирование полного промпта с историей
-        val fullPrompt = buildFullPrompt(systemPrompt, query)
-
-        // 7. Генерация ответа (Generation)
         val answer = try {
             yandexGptClient.generateText(
                 systemPrompt = systemPrompt,
-                userPrompt = buildUserPromptWithHistory(query),
+                userPrompt = userPrompt,
                 temperature = 0.3,
                 maxTokens = 2000
             )
         } catch (e: Exception) {
-            logger.error("Ошибка генерации ответа: ${e.message}", e)
             "❌ Ошибка генерации ответа: ${e.message}"
         }
 
-        // 8. Обновление истории
+        // 6. Обновление истории
         chatHistory.messages.add(ChatMessage(MessageRole.USER, query))
         chatHistory.messages.add(ChatMessage(MessageRole.ASSISTANT, answer))
         historyRepository.save(chatHistory)
@@ -88,8 +82,8 @@ class ChatService(
             """
             Ты — умный ассистент с доступом к базе знаний.
             Твоя задача — отвечать на вопросы пользователя, используя предоставленный контекст из документов.
-            Если информации в контексте недостаточно для полного ответа, используй общие знания, но обязательно упомяни это.
-            Всегда ссылайся на источники в формате [источник: имя_файла], когда используешь информацию из контекста.
+            Если информации в контексте недостаточно, используй общие знания, но предупреди об этом.
+            Всегда ссылайся на источники в формате [источник: имя_файла].
             
             === КОНТЕКСТ ИЗ БАЗЫ ЗНАНИЙ ===
             $context
@@ -97,62 +91,106 @@ class ChatService(
         } else {
             """
             Ты — умный ассистент.
-            В базе знаний не найдено релевантной информации для текущего вопроса.
-            Ответь на основе своих общих знаний, но будь честен, если не уверен.
+            В базе знаний не найдено релевантной информации.
+            Ответь на основе своих общих знаний, но будь честен.
             """.trimIndent()
         }
     }
 
     private fun buildUserPromptWithHistory(currentQuery: String): String {
-        val historyText = if (chatHistory.messages.isNotEmpty()) {
-            val recentMessages = chatHistory.messages.takeLast(6) // Последние 3 пары
-            val formattedHistory = recentMessages.joinToString("\n") { msg ->
-                when (msg.role) {
-                    MessageRole.USER -> "Пользователь: ${msg.content}"
-                    MessageRole.ASSISTANT -> "Ассистент: ${msg.content}"
-                    MessageRole.SYSTEM -> "Система: ${msg.content}"
-                }
-            }
-            "\n\n=== ИСТОРИЯ ДИАЛОГА ===\n$formattedHistory\n"
-        } else {
-            ""
+        val sb = StringBuilder()
+
+        // 1. Добавляем саммари (долгосрочная память)
+        if (chatHistory.summary.isNotBlank()) {
+            sb.append("=== КРАТКОЕ СОДЕРЖАНИЕ ПРЕДЫДУЩЕГО ДИАЛОГА ===\n")
+            sb.append(chatHistory.summary)
+            sb.append("\n\n")
         }
 
-        return """
-            $historyText
-            
-            === ТЕКУЩИЙ ВОПРОС ===
-            $currentQuery
-        """.trimIndent()
-    }
+        // 2. Добавляем последние сообщения (краткосрочная память)
+        if (chatHistory.messages.isNotEmpty()) {
+            sb.append("=== ПОСЛЕДНИЕ СООБЩЕНИЯ ===\n")
+            chatHistory.messages.forEach { msg ->
+                val roleName = when (msg.role) {
+                    MessageRole.USER -> "Пользователь"
+                    MessageRole.ASSISTANT -> "Ассистент"
+                    MessageRole.SYSTEM -> "Система"
+                }
+                sb.append("$roleName: ${msg.content}\n")
+            }
+            sb.append("\n")
+        }
 
-    private fun buildFullPrompt(systemPrompt: String, query: String): String {
-        return "$systemPrompt\n\n${buildUserPromptWithHistory(query)}"
+        // 3. Текущий вопрос
+        sb.append("=== ТЕКУЩИЙ ВОПРОС ===\n")
+        sb.append(currentQuery)
+
+        return sb.toString()
     }
 
     private suspend fun manageHistorySize() {
         if (chatHistory.messages.size > maxHistoryMessages) {
-            // Простое сжатие: оставляем последние N сообщений
-            val recentMessages = chatHistory.messages.takeLast(maxHistoryMessages).toMutableList()
+            logger.info("История превысила лимит (${chatHistory.messages.size} > $maxHistoryMessages). Запуск суммаризации...")
 
-            // Опционально: можно добавить суммаризацию старых сообщений
-            // val oldMessages = chatHistory.messages.dropLast(maxHistoryMessages)
-            // val summary = summarizeOldMessages(oldMessages)
-            // recentMessages.add(0, ChatMessage(MessageRole.SYSTEM, "Краткое содержание предыдущего диалога: $summary"))
+            // Берем старые сообщения, которые нужно сжать (все, кроме последних N/2, чтобы оставить немного свежего контекста)
+            val keepCount = 2 // Оставляем только последнюю пару вопрос-ответ
+            val messagesToSummarize = chatHistory.messages.dropLast(keepCount)
+            val messagesToKeep = chatHistory.messages.takeLast(keepCount)
 
+            // Формируем текст для суммаризации
+            val textToSummarize = messagesToSummarize.joinToString("\n") { "${it.role}: ${it.content}" }
+
+            // Если уже было саммари, добавляем его тоже, чтобы обновить
+            val fullContext = if (chatHistory.summary.isNotBlank()) {
+                "Предыдущее саммари:\n${chatHistory.summary}\n\nНовые сообщения:\n$textToSummarize"
+            } else {
+                textToSummarize
+            }
+
+            // Запрашиваем суммаризацию у LLM
+            val newSummary = summarizeText(fullContext)
+
+            // Обновляем состояние
+            chatHistory.summary = newSummary
             chatHistory.messages.clear()
-            chatHistory.messages.addAll(recentMessages)
-            historyRepository.save(chatHistory)
+            chatHistory.messages.addAll(messagesToKeep)
 
-            logger.info("История сжата: оставлено последних $maxHistoryMessages сообщений")
+            historyRepository.save(chatHistory)
+            logger.info("Суммаризация завершена. Новое саммари: \"${newSummary.take(50)}...\"")
+        }
+    }
+
+    private suspend fun summarizeText(text: String): String {
+        val systemPrompt = """
+            Ты — эксперт-аналитик. Твоя задача — сжать историю диалога.
+            Создай краткое, но информативное саммари (сводку) на русском языке.
+            Сохрани ключевые факты, вопросы пользователя и данные, которые он предоставил.
+            Результат должен позволить боту продолжить разговор, помня контекст.
+        """.trimIndent()
+
+        return try {
+            yandexGptClient.generateText(
+                systemPrompt = systemPrompt,
+                userPrompt = text,
+                temperature = 0.3,
+                maxTokens = 1000
+            )
+        } catch (e: Exception) {
+            logger.error("Ошибка при суммаризации", e)
+            chatHistory.summary // Возвращаем старое, если ошибка
         }
     }
 
     fun clearHistory() {
+        chatHistory.summary = ""
         chatHistory.messages.clear()
         historyRepository.save(chatHistory)
         logger.info("История диалога очищена")
     }
 
     fun getHistorySize(): Int = chatHistory.messages.size
+
+    // Геттеры для отображения в UI
+    fun getSummary(): String = chatHistory.summary
+    fun getRecentMessages(): List<ChatMessage> = chatHistory.messages
 }

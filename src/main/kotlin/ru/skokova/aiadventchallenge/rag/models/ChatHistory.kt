@@ -15,5 +15,6 @@ data class ChatMessage(
 
 @Serializable
 data class ChatHistory(
+    var summary: String = "", // Сжатая история прошлых бесед
     val messages: MutableList<ChatMessage> = mutableListOf()
 )

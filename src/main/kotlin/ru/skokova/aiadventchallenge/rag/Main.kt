@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import ru.skokova.aiadventchallenge.rag.client.YandexEmbeddingClient
 import ru.skokova.aiadventchallenge.rag.client.YandexGptClient
 import ru.skokova.aiadventchallenge.rag.models.ComparisonReport
+import ru.skokova.aiadventchallenge.rag.models.MessageRole
 import ru.skokova.aiadventchallenge.rag.models.VectorIndex
 import ru.skokova.aiadventchallenge.rag.repository.HistoryRepository
 import ru.skokova.aiadventchallenge.rag.services.ChatService
@@ -66,6 +67,7 @@ fun main() = runBlocking {
                     }
                 }
             }
+
             "search" -> {
                 if (currentIndex == null) {
                     println("⚠️ Сначала создайте индекс!")
@@ -86,36 +88,37 @@ fun main() = runBlocking {
                     }
                 }
             }
+
             "compare" -> {
                 if (currentIndex == null) {
                     println("⚠️ Сначала создайте индекс!")
                 } else {
                     println("🔬 Запускаю сравнение RAG vs без-RAG...")
-                    
+
                     // Вопросы смешанные: общие + специфичные для проектов
                     val questions = listOf(
                         // Про Day 10 (чат-бот с памятью)
                         "Какие параметры используются в YandexGptClient в проекте Day 10?",
-                        
+
                         // Про Day 15 (MCP оркестрация)
                         "Какие 4 MCP сервера используются в проекте Day 15 и какие у них роли?",
-                        
+
                         // Про Day 17 (RAG система)
                         "Какой размер чанка и overlap используется в TextChunker в проекте Day 17?",
-                        
+
                         // Общие вопросы про RAG
                         "В чём разница между text-search-doc и text-search-query моделями?",
-                        
+
                         // Специфичный вопрос про Day 15
                         "Какой API использует CryptoCurrencyMCPServer для получения курсов криптовалют?",
-                        
+
                         // Специфичный вопрос про Day 10
                         "В каком файле сохраняется история диалога в проекте Day 10?",
-                        
+
                         // Специфичный вопрос про Day 17
                         "Какие консольные команды доступны в RAG проекте Day 17?"
                     )
-                    
+
                     try {
                         val report = ragComparisonService.compareApproaches(questions, currentIndex)
                         saveComparisonReport(report)
@@ -126,6 +129,7 @@ fun main() = runBlocking {
                     }
                 }
             }
+
             "rerank" -> {
                 if (currentIndex == null) {
                     println("❌ Индекс не загружен. Выполните 'index <путь>' или 'load'")
@@ -166,8 +170,13 @@ fun main() = runBlocking {
                     println("⚠️ Нет результатов выше порога $threshold после LLM оценки")
                 } else {
                     llmResults.filter { it.isRelevant }.forEachIndexed { idx, result ->
-                        println("${idx + 1}. [${result.chunk.metadata.sourceFile}] " +
-                                "Combined Score: %.4f (orig: %.4f)".format(result.rerankScore, result.originalSimilarity))
+                        println(
+                            "${idx + 1}. [${result.chunk.metadata.sourceFile}] " +
+                                    "Combined Score: %.4f (orig: %.4f)".format(
+                                        result.rerankScore,
+                                        result.originalSimilarity
+                                    )
+                        )
                     }
                 }
             }
@@ -228,14 +237,17 @@ fun main() = runBlocking {
                 println("\n✅ Сравнение завершено!")
                 println("📄 Отчёт сохранён в RERANKING_REPORT.md")
             }
+
             "stats" -> {
                 if (currentIndex == null) println("Индекс пуст")
                 else println("📊 В индексе ${currentIndex!!.chunks.size} чанков. Создан: ${currentIndex.createdAt}")
             }
+
             "exit" -> {
                 println("До свидания! 👋")
                 isRunning = false
             }
+
             "help" -> printHelp()
             "chat" -> { // <--- НОВАЯ КОМАНДА
                 if (currentIndex == null) {
@@ -244,6 +256,7 @@ fun main() = runBlocking {
                     runChatMode(chatService, currentIndex, scanner)
                 }
             }
+
             else -> println("Неизвестная команда. Введите 'help'")
         }
     }
@@ -258,11 +271,11 @@ fun saveComparisonReport(report: ComparisonReport) {
         appendLine()
         appendLine("---")
         appendLine()
-        
+
         report.questions.forEachIndexed { index, comparison ->
             appendLine("## Вопрос ${index + 1}: \"${comparison.question}\"")
             appendLine()
-            
+
             // Ответ С RAG
             appendLine("### ✅ Ответ С RAG")
             appendLine()
@@ -285,18 +298,18 @@ fun saveComparisonReport(report: ComparisonReport) {
                 appendLine("   > “$preview...”")
                 appendLine()
             }
-            
+
             appendLine("**Ответ модели:**")
             appendLine()
             appendLine(comparison.answerWithRag.answer)
             appendLine()
-            
+
             // Ответ БЕЗ RAG
             appendLine("### ❌ Ответ БЕЗ RAG")
             appendLine()
             appendLine(comparison.answerWithoutRag)
             appendLine()
-            
+
             // Анализ
             appendLine("### 🔍 Анализ различий")
             appendLine()
@@ -305,31 +318,35 @@ fun saveComparisonReport(report: ComparisonReport) {
             appendLine("---")
             appendLine()
         }
-        
+
         // Summary
         appendLine(report.summary)
     }
-    
+
     File("COMPARISON_REPORT.md").writeText(content)
 }
 
 fun printBanner() {
-    println("""
+    println(
+        """
         =============================================
            🤖 KOTLIN RAG CONSOLE - AI ADVENT 🎄
         =============================================
-    """.trimIndent())
+    """.trimIndent()
+    )
 }
 
 fun printHelp() {
-    println("""
+    println(
+        """
         Команды:
         • index <path>   - Индексировать папку с .md/.txt файлами
         • search <text>  - Семантический поиск по базе
         • compare        - Сравнить RAG vs без-RAG
         • stats          - Показать статистику индекса
         • exit           - Выход
-    """.trimIndent())
+    """.trimIndent()
+    )
 }
 
 // --- ANSI цвета для консоли ---
@@ -348,25 +365,40 @@ suspend fun runChatMode(
     index: VectorIndex,
     scanner: Scanner
 ) {
-    // Очистка экрана (ANSI escape code)
-    print("\u001b[H\u001b[2J")
+    print("\u001b[H\u001b[2J") // Clear screen
 
     println("${Ansi.BOLD}${Ansi.CYAN}╔══════════════════════════════════════════════════════════════╗")
     println("║         🤖 KOTLIN RAG CHAT :: DAY 19 CHALLENGE               ║")
     println("╚══════════════════════════════════════════════════════════════╝${Ansi.RESET}")
     println("${Ansi.GREY}Команды: /clear - забыть контекст, /exit - выход${Ansi.RESET}")
 
-    // --- Логика отображения истории ---
-    val historySize = chatService.getHistorySize()
-    if (historySize > 0) {
-        println("\n${Ansi.YELLOW}📜 Восстановлена история диалога: $historySize сообщений.${Ansi.RESET}")
-        // Можно показать последнее сообщение для контекста
-        // val lastMsg = chatService.getLastUserMessage()
-        // if (lastMsg != null) println("${Ansi.GREY}Последний запрос: \"$lastMsg\"${Ansi.RESET}")
+    // --- Отображение истории ---
+    val summary = chatService.getSummary()
+    val recentMessages = chatService.getRecentMessages()
+
+    if (summary.isNotBlank() || recentMessages.isNotEmpty()) {
+        println("\n${Ansi.YELLOW}📜 Восстановлена история диалога:${Ansi.RESET}")
+
+        if (summary.isNotBlank()) {
+            println("${Ansi.GREY}📝 Сводка прошлого:${Ansi.RESET}")
+            println("${Ansi.WHITE}$summary${Ansi.RESET}")
+            println("${Ansi.GREY}---${Ansi.RESET}")
+        }
+
+        if (recentMessages.isNotEmpty()) {
+            println("${Ansi.GREY}💬 Последние сообщения:${Ansi.RESET}")
+            recentMessages.forEach { msg ->
+                val rolePrefix =
+                    if (msg.role == MessageRole.USER) "${Ansi.GREEN}User${Ansi.RESET}" else "${Ansi.CYAN}Bot${Ansi.RESET}"
+                // Обрезаем длинные сообщения для превью
+                val preview = if (msg.content.length > 80) msg.content.take(80) + "..." else msg.content
+                println("  $rolePrefix: $preview")
+            }
+        }
     } else {
         println("\n${Ansi.GREY}📜 История пуста. Начинаем с чистого листа.${Ansi.RESET}")
     }
-    // ----------------------------------
+    // ---------------------------
 
     while (true) {
         print("\n${Ansi.BOLD}${Ansi.GREEN}User 👤 > ${Ansi.RESET}")
